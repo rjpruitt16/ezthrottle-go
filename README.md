@@ -1,6 +1,6 @@
 # EZThrottle Go SDK
 
-Official Go client for [EZThrottle](https://ezthrottle.com) - The World's First API Aqueduct.
+Official Go client for [EZThrottle](https://ezthrottle.network) - The World's First API Aqueduct.
 
 ## Installation
 
