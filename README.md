@@ -2,6 +2,14 @@
 
 Official Go client for [EZThrottle](https://ezthrottle.network) - The World's First API Aqueduct.
 
+## Get Your API Key
+
+👉 **[Get started at ezthrottle.network](https://www.ezthrottle.network/)**
+
+**Pay for delivery through outages and rate limiting. Unlimited free concurrency.**
+
+No need to manage Lambda functions, SQS queues, DynamoDB, or complex retry logic. EZThrottle handles webhook fanout, distributed queuing, and multi-region orchestration for you. Just grab an API key and start shipping reliable API calls.
+
 ## Installation
 
 ```bash
@@ -478,6 +486,34 @@ result, err := ezthrottle.NewStep(client).
     IdempotentStrategy(ezthrottle.IdempotentStrategyUnique).
     Execute(context.Background())
 ```
+
+## Rate Limiting & Tuning
+
+EZThrottle intelligently manages rate limits for your API calls. By default, requests are throttled at **2 RPS (requests per second)** to smooth rate limiting across distributed workers and prevent API overload.
+
+### Dynamic Rate Limiting via Response Headers
+
+Your API can communicate rate limits back to EZThrottle using response headers:
+
+```go
+// Your API responds with these headers:
+X-EZTHROTTLE-RPS: 5  // Allow 5 requests per second
+X-EZTHROTTLE-MAX-CONCURRENT: 10  // Allow 10 concurrent requests
+```
+
+**Header Details:**
+- `X-EZTHROTTLE-RPS`: Requests per second (e.g., `0.5` = 1 request per 2 seconds, `5` = 5 requests per second)
+- `X-EZTHROTTLE-MAX-CONCURRENT`: Maximum concurrent requests (default: 2 per machine)
+
+EZThrottle automatically adjusts its rate limiting based on these headers, ensuring optimal throughput without overwhelming your APIs.
+
+**Performance Note:** Server-side retry handling is significantly faster and more performant than client-side retry loops. EZThrottle's distributed architecture eliminates connection overhead and retry latency. *Benchmarks coming soon.*
+
+### Requesting Custom Defaults
+
+Need different default rate limits for your account? Submit a configuration request:
+
+👉 **[Request custom defaults at github.com/rjpruitt16/ezconfig](https://github.com/rjpruitt16/ezconfig)**
 
 ## Webhook Payload
 
