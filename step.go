@@ -3,7 +3,7 @@ package ezthrottle
 import (
 	"context"
 	"fmt"
-	"net/http"
+	"io"
 	"time"
 
 	"github.com/google/uuid"
@@ -251,11 +251,22 @@ func (s *Step) executeFrugal(ctx context.Context) (*QueueResponse, error) {
 			go s.onSuccessStep.Execute(context.Background())
 		}
 
+		// Read response body
+		body := ""
+		if resp.Body != nil {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			body = string(bodyBytes)
+			resp.Body.Close()
+		}
+
 		// Return immediate response (converted to QueueResponse format)
 		return &QueueResponse{
-			Status:   "completed",
-			JobID:    "frugal_local_" + uuid.New().String(),
-			QueuedAt: time.Now().UnixMilli(),
+			Status:          "success",
+			JobID:           "frugal_local_" + uuid.New().String(),
+			QueuedAt:        time.Now().UnixMilli(),
+			ExecutedLocally: true,
+			StatusCode:      resp.StatusCode,
+			ResponseBody:    body,
 		}, nil
 	}
 
@@ -318,12 +329,9 @@ func (s *Step) buildSubmitJobRequest() *SubmitJobRequest {
 	// Add fallback chain
 	if s.fallbackStep != nil {
 		fallbackReq := s.fallbackStep.buildSubmitJobRequest()
-		// Add trigger to fallback metadata
+		// Add trigger as top-level field (not in metadata!)
 		if s.fallbackTrigger != nil {
-			if fallbackReq.Metadata == nil {
-				fallbackReq.Metadata = make(map[string]interface{})
-			}
-			fallbackReq.Metadata["trigger"] = s.fallbackTrigger
+			fallbackReq.Trigger = s.fallbackTrigger
 		}
 		req.FallbackJob = fallbackReq
 	}

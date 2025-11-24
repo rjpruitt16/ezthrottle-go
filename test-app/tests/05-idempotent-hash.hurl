@@ -7,9 +7,10 @@ jsonpath "$.deduped" == true
 
 [Captures]
 job_id: jsonpath "$.result1.job_id"
+idempotent_key: jsonpath "$.idempotent_key"
 
 # Poll for webhook
-GET {{APP_URL}}/webhooks/{{job_id}}
+GET {{APP_URL}}/webhooks/{{idempotent_key}}
 [Options]
 retry: 30
 retry-interval: 1000

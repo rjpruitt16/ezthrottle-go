@@ -7,18 +7,18 @@ LABEL fly_launch_runtime="Go"
 
 WORKDIR /build
 
-# Copy SDK source code from parent directory
-COPY go.mod /build/sdk/go.mod
-COPY go.sum /build/sdk/go.sum
-COPY *.go /build/sdk/
+# Copy SDK source code from parent directory (to /build/ for replace directive)
+COPY go.mod /build/go.mod
+COPY go.sum /build/go.sum
+COPY *.go /build/
 
 # Copy test app code
 COPY test-app/go.mod /build/test-app/go.mod
 COPY test-app/main.go /build/test-app/main.go
 
-# Build test app (replace directive will use local SDK)
+# Build test app (replace directive will use local SDK at ../)
 WORKDIR /build/test-app
-RUN go mod download
+RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux go build -o app main.go
 
 # Final stage - minimal runtime image

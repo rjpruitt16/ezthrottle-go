@@ -1,6 +1,6 @@
-.PHONY: integration deploy secrets
+.PHONY: integration deploy secrets teardown
 
-# Integration tests (deploy + test via Hurl)
+# Integration tests (deploy + test + teardown)
 integration:
 	@echo "🚀 Deploying test app to Fly..."
 	@$(MAKE) deploy
@@ -15,6 +15,9 @@ integration:
 		--color
 	@echo ""
 	@echo "✅ All tests passed!"
+	@echo ""
+	@echo "🧹 Tearing down test app..."
+	@$(MAKE) teardown
 
 # Deploy to Fly.io (from parent directory to include SDK source)
 deploy:
@@ -27,3 +30,7 @@ deploy:
 # Set secrets (run once after fly launch)
 secrets:
 	@bash -c 'source .env.test'
+
+# Teardown (destroy the app to save resources)
+teardown:
+	@fly apps destroy ezthrottle-sdk-go --yes || true

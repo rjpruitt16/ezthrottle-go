@@ -8,7 +8,7 @@ parent_key: jsonpath "$.parent_key"
 child_key: jsonpath "$.child_key"
 
 # Poll for parent webhook
-GET {{APP_URL}}/webhooks/{{parent_job_id}}
+GET {{APP_URL}}/webhooks/{{parent_key}}
 [Options]
 retry: 30
 retry-interval: 1000

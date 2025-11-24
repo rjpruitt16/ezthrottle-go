@@ -21,8 +21,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sync"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -37,16 +35,7 @@ var (
 	PORT           = getEnv("PORT", "8080")
 )
 
-// In-memory webhook store (thread-safe with mutex)
-type WebhookData struct {
-	ReceivedAt string                 `json:"received_at"`
-	Data       map[string]interface{} `json:"data"`
-}
-
-var (
-	webhookStore = make(map[string]*WebhookData)
-	storeMutex   sync.RWMutex
-)
+// No need for custom webhook store - SDK handles it!
 
 // EZThrottle client
 var client *ezthrottle.Client
@@ -68,13 +57,15 @@ func main() {
 	r := gin.Default()
 
 	// =============================================================================
-	// WEBHOOK RECEIVER
+	// WEBHOOK RECEIVER (uses SDK's WebhookHandler)
 	// =============================================================================
 
-	r.POST("/webhook", handleWebhook)
-	r.GET("/webhooks/:job_id", getWebhook)
+	// Mount SDK's webhook handler (same server, same port!)
+	r.POST("/webhook", gin.WrapH(client.WebhookHandler()))
+
+	// Query endpoints for Hurl tests
+	r.GET("/webhooks/:idempotent_key", getWebhook)
 	r.GET("/webhooks", listWebhooks)
-	r.POST("/webhooks/reset", resetWebhooks)
 
 	// =============================================================================
 	// TEST ENDPOINTS (Return job_id immediately, don't wait for webhooks)
@@ -87,6 +78,7 @@ func main() {
 	r.POST("/test/idempotent/hash", testIdempotentHash)
 	r.POST("/test/idempotent/unique", testIdempotentUnique)
 	r.POST("/test/frugal/local", testFrugalLocal)
+	r.POST("/test/forward/legacy", testForwardLegacy)
 
 	// =============================================================================
 	// HEALTH & INFO
@@ -106,68 +98,36 @@ func main() {
 // WEBHOOK HANDLERS
 // =============================================================================
 
-func handleWebhook(c *gin.Context) {
-	var payload map[string]interface{}
-	if err := c.BindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	jobID, _ := payload["job_id"].(string)
-	idempotentKey, _ := payload["idempotent_key"].(string)
-	status, _ := payload["status"].(string)
-
-	// Store webhook data
-	storeMutex.Lock()
-	webhookStore[jobID] = &WebhookData{
-		ReceivedAt: time.Now().Format(time.RFC3339),
-		Data:       payload,
-	}
-	storeMutex.Unlock()
-
-	log.Printf("✅ Webhook: %s | key: %s | status: %s\n", jobID, idempotentKey, status)
-
-	c.JSON(http.StatusOK, gin.H{
-		"status": "received",
-		"job_id": jobID,
-	})
-}
-
+// Query webhook result by idempotent key (for Hurl tests)
 func getWebhook(c *gin.Context) {
-	jobID := c.Param("job_id")
+	idempotentKey := c.Param("idempotent_key")
 
-	storeMutex.RLock()
-	webhook, exists := webhookStore[jobID]
-	storeMutex.RUnlock()
+	// Query SDK's webhook store
+	webhook, exists := client.GetWebhookResult(idempotentKey)
 
 	if exists {
+		// Wrap webhook data to match Python SDK structure (for test compatibility)
 		c.JSON(http.StatusOK, gin.H{
-			"found":   true,
-			"job_id":  jobID,
-			"webhook": webhook,
+			"found":          true,
+			"idempotent_key": idempotentKey,
+			"webhook": gin.H{
+				"received_at": webhook.ReceivedAt,
+				"data":        webhook, // Wrap in "data" field
+			},
 		})
 	} else {
-		c.JSON(http.StatusNotFound, gin.H{"found": false})
+		c.JSON(http.StatusNotFound, gin.H{
+			"found":          false,
+			"idempotent_key": idempotentKey,
+		})
 	}
 }
 
+// List all webhooks (for debugging)
 func listWebhooks(c *gin.Context) {
-	storeMutex.RLock()
-	defer storeMutex.RUnlock()
-
 	c.JSON(http.StatusOK, gin.H{
-		"count":    len(webhookStore),
-		"webhooks": webhookStore,
+		"message": "Use GET /webhooks/:idempotent_key to query specific webhook",
 	})
-}
-
-func resetWebhooks(c *gin.Context) {
-	storeMutex.Lock()
-	webhookStore = make(map[string]*WebhookData)
-	storeMutex.Unlock()
-
-	log.Println("🧹 Webhook store cleared")
-	c.JSON(http.StatusOK, gin.H{"status": "cleared"})
 }
 
 // =============================================================================
@@ -326,11 +286,12 @@ func testIdempotentHash(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"test":     "idempotent_hash",
-		"result1":  result1,
-		"result2":  result2,
-		"expected": "Same job_id (deduped)",
-		"deduped":  result1.JobID == result2.JobID,
+		"test":           "idempotent_hash",
+		"result1":        result1,
+		"result2":        result2,
+		"idempotent_key": result1.IdempotentKey, // Return the backend-generated hash
+		"expected":       "Same job_id (deduped)",
+		"deduped":        result1.JobID == result2.JobID,
 	})
 }
 
@@ -394,6 +355,71 @@ func testFrugalLocal(c *gin.Context) {
 	})
 }
 
+func testForwardLegacy(c *gin.Context) {
+	// Test 8: Legacy code integration with ForwardRequest pattern
+	// Simulates legacy payment processing that may hit rate limits
+
+	// Legacy function that returns ForwardRequest on errors
+	processPayment := func() (interface{}, *ezthrottle.ForwardRequest, error) {
+		// Simulate calling a rate-limited API
+		resp, err := http.Get("https://httpbin.org/status/429")
+
+		if err != nil {
+			// Network error - forward to EZThrottle for retry
+			return nil, &ezthrottle.ForwardRequest{
+				URL:           "https://httpbin.org/status/200?test=forward_legacy",
+				Method:        "GET",
+				IdempotentKey: fmt.Sprintf("legacy_payment_%s", uuid.New().String()),
+				Webhooks: []ezthrottle.Webhook{
+					{URL: fmt.Sprintf("%s/webhook", APP_URL), HasQuorumVote: true},
+				},
+				StepType: ezthrottle.StepTypeFrugal,
+			}, nil
+		}
+
+		if resp.StatusCode == 429 {
+			// Rate limited - forward to EZThrottle
+			return nil, &ezthrottle.ForwardRequest{
+				URL:           "https://httpbin.org/status/200?test=forward_legacy_retry",
+				Method:        "GET",
+				IdempotentKey: fmt.Sprintf("legacy_payment_%s", uuid.New().String()),
+				Webhooks: []ezthrottle.Webhook{
+					{URL: fmt.Sprintf("%s/webhook", APP_URL), HasQuorumVote: true},
+				},
+				StepType: ezthrottle.StepTypeFrugal,
+			}, nil
+		}
+
+		// Success - return response
+		return resp, nil, nil
+	}
+
+	// Execute with automatic forwarding
+	result, err := ezthrottle.ExecuteWithForwarding(client, processPayment)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Check if result is QueueResponse (forwarded) or http.Response (direct)
+	if queueResp, ok := result.(*ezthrottle.QueueResponse); ok {
+		c.JSON(http.StatusOK, gin.H{
+			"test":           "forward_legacy",
+			"forwarded":      true,
+			"idempotent_key": queueResp.IdempotentKey,
+			"job_id":         queueResp.JobID,
+			"result":         queueResp,
+		})
+	} else {
+		c.JSON(http.StatusOK, gin.H{
+			"test":      "forward_legacy",
+			"forwarded": false,
+			"result":    "Direct response (not forwarded)",
+		})
+	}
+}
+
 // =============================================================================
 // HEALTH & INFO
 // =============================================================================
@@ -411,6 +437,7 @@ func handleRoot(c *gin.Context) {
 				"POST /test/idempotent/hash",
 				"POST /test/idempotent/unique",
 				"POST /test/frugal/local",
+				"POST /test/forward/legacy",
 			},
 			"webhooks": []string{
 				"POST /webhook",

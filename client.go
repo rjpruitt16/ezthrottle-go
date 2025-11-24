@@ -14,6 +14,7 @@ type Client struct {
 	apiKey        string
 	tracktTagsURL string
 	httpClient    *http.Client
+	webhookStore  *WebhookStore
 }
 
 // NewClient creates a new EZThrottle client
@@ -24,6 +25,7 @@ func NewClient(apiKey string, opts ...ClientOption) *Client {
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		webhookStore: NewWebhookStore(), // Always create webhook store
 	}
 
 	for _, opt := range opts {
@@ -50,6 +52,44 @@ func WithHTTPClient(client *http.Client) ClientOption {
 	}
 }
 
+// WebhookHandler returns an HTTP handler for receiving webhooks from EZThrottle.
+// Mount this handler on YOUR existing server at any route you want.
+//
+// Example with Gin:
+//
+//	router := gin.Default()
+//	router.POST("/webhook", gin.WrapH(client.WebhookHandler()))
+//
+// Example with net/http:
+//
+//	http.Handle("/webhook", client.WebhookHandler())
+//
+// Example with Echo:
+//
+//	e.POST("/webhook", echo.WrapHandler(client.WebhookHandler()))
+func (c *Client) WebhookHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c.webhookStore.processWebhook(w, r)
+	})
+}
+
+// GetWebhookResult retrieves a webhook result by idempotent key
+func (c *Client) GetWebhookResult(idempotentKey string) (*WebhookResult, bool) {
+	return c.webhookStore.Get(idempotentKey)
+}
+
+// WatchWebhook returns a channel that will receive the webhook result.
+// Use this to wait for webhook results in a non-blocking way.
+//
+// Example:
+//
+//	result, _ := step.Execute(ctx)
+//	webhookChan := client.WatchWebhook(result.IdempotentKey)
+//	webhookResult := <-webhookChan  // Blocks until webhook arrives
+func (c *Client) WatchWebhook(idempotentKey string) <-chan *WebhookResult {
+	return c.webhookStore.Watch(idempotentKey)
+}
+
 // SubmitJob submits a job to EZThrottle with full API support
 func (c *Client) SubmitJob(req *SubmitJobRequest) (*QueueResponse, error) {
 	// Build the job payload
@@ -72,47 +112,55 @@ func (c *Client) SubmitJob(req *SubmitJobRequest) (*QueueResponse, error) {
 		jobPayload["webhooks"] = req.Webhooks
 	}
 	if req.WebhookQuorum > 0 {
-		jobPayload["webhookQuorum"] = req.WebhookQuorum
+		jobPayload["webhook_quorum"] = req.WebhookQuorum
 	}
 	if req.Regions != nil && len(req.Regions) > 0 {
 		jobPayload["regions"] = req.Regions
 	}
 	if req.RegionPolicy != "" {
-		jobPayload["regionPolicy"] = req.RegionPolicy
+		jobPayload["region_policy"] = req.RegionPolicy
 	}
 	if req.ExecutionMode != "" {
-		jobPayload["executionMode"] = req.ExecutionMode
+		jobPayload["execution_mode"] = req.ExecutionMode
 	}
 	if req.RetryPolicy != nil {
-		jobPayload["retryPolicy"] = req.RetryPolicy
+		jobPayload["retry_policy"] = req.RetryPolicy
 	}
 	if req.FallbackJob != nil {
-		jobPayload["fallbackJob"] = req.FallbackJob
+		jobPayload["fallback_job"] = req.FallbackJob
 	}
 	if req.OnSuccess != nil {
-		jobPayload["onSuccess"] = req.OnSuccess
+		jobPayload["on_success"] = req.OnSuccess
 	}
 	if req.OnFailure != nil {
-		jobPayload["onFailure"] = req.OnFailure
+		jobPayload["on_failure"] = req.OnFailure
 	}
 	if req.OnFailureTimeoutMs > 0 {
-		jobPayload["onFailureTimeoutMs"] = req.OnFailureTimeoutMs
+		jobPayload["on_failure_timeout_ms"] = req.OnFailureTimeoutMs
 	}
 	if req.IdempotentKey != "" {
-		jobPayload["idempotentKey"] = req.IdempotentKey
+		jobPayload["idempotent_key"] = req.IdempotentKey
 	}
 	if req.RetryAt > 0 {
-		jobPayload["retryAt"] = req.RetryAt
+		jobPayload["retry_at"] = req.RetryAt
+	}
+
+	// Marshal job payload to JSON string (TracktTags proxy expects string, not object)
+	jobPayloadBytes, err := json.Marshal(jobPayload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal job payload: %w", err)
 	}
 
 	// Build proxy payload
 	proxyPayload := map[string]interface{}{
-		"url":    "https://ezthrottle.fly.dev/api/v1/jobs",
-		"method": "POST",
+		"scope":       "customer",
+		"metric_name": "", // Empty = check all plan limits
+		"target_url":  "https://ezthrottle.fly.dev/api/v1/jobs",
+		"method":      "POST",
 		"headers": map[string]string{
 			"Content-Type": "application/json",
 		},
-		"body": jobPayload,
+		"body": string(jobPayloadBytes), // Send as JSON string, not object
 	}
 
 	payloadBytes, err := json.Marshal(proxyPayload)
@@ -175,7 +223,8 @@ func (c *Client) SubmitJob(req *SubmitJobRequest) (*QueueResponse, error) {
 
 	// Parse forwarded EZThrottle response
 	forwarded := proxyResp.ForwardedResponse
-	if forwarded.StatusCode != 201 {
+	// Accept both 200 (duplicate job) and 201 (new job created)
+	if forwarded.StatusCode != 200 && forwarded.StatusCode != 201 {
 		return nil, fmt.Errorf("EZThrottle job creation failed: %s", forwarded.Body)
 	}
 
@@ -274,17 +323,18 @@ type SubmitJobRequest struct {
 	Body                string                 `json:"body,omitempty"`
 	Metadata            map[string]interface{} `json:"metadata,omitempty"`
 	Webhooks            []Webhook              `json:"webhooks,omitempty"`
-	WebhookQuorum       int                    `json:"webhookQuorum,omitempty"`
+	WebhookQuorum       int                    `json:"webhook_quorum,omitempty"`
 	Regions             []string               `json:"regions,omitempty"`
-	RegionPolicy        string                 `json:"regionPolicy,omitempty"`        // "fallback" or "strict"
-	ExecutionMode       string                 `json:"executionMode,omitempty"`       // "race" or "fanout"
-	RetryPolicy         *RetryPolicy           `json:"retryPolicy,omitempty"`
-	FallbackJob         *SubmitJobRequest      `json:"fallbackJob,omitempty"`
-	OnSuccess           *SubmitJobRequest      `json:"onSuccess,omitempty"`
-	OnFailure           *SubmitJobRequest      `json:"onFailure,omitempty"`
-	OnFailureTimeoutMs  int                    `json:"onFailureTimeoutMs,omitempty"`
-	IdempotentKey       string                 `json:"idempotentKey,omitempty"`
-	RetryAt             int64                  `json:"retryAt,omitempty"` // Unix timestamp in milliseconds
+	RegionPolicy        string                 `json:"region_policy,omitempty"`        // "fallback" or "strict"
+	ExecutionMode       string                 `json:"execution_mode,omitempty"`       // "race" or "fanout"
+	RetryPolicy         *RetryPolicy           `json:"retry_policy,omitempty"`
+	Trigger             map[string]interface{} `json:"trigger,omitempty"`              // Fallback trigger (on_error, on_timeout)
+	FallbackJob         *SubmitJobRequest      `json:"fallback_job,omitempty"`
+	OnSuccess           *SubmitJobRequest      `json:"on_success,omitempty"`
+	OnFailure           *SubmitJobRequest      `json:"on_failure,omitempty"`
+	OnFailureTimeoutMs  int                    `json:"on_failure_timeout_ms,omitempty"`
+	IdempotentKey       string                 `json:"idempotent_key,omitempty"`
+	RetryAt             int64                  `json:"retry_at,omitempty"` // Unix timestamp in milliseconds
 }
 
 // Webhook represents a webhook configuration
@@ -304,10 +354,16 @@ type RetryPolicy struct {
 
 // QueueResponse represents the response from queueing a job
 type QueueResponse struct {
-	JobID     string `json:"job_id"`
-	Status    string `json:"status"`
-	QueuedAt  int64  `json:"queued_at"`
+	JobID          string `json:"job_id"`
+	IdempotentKey  string `json:"idempotent_key,omitempty"`
+	Status         string `json:"status"`
+	QueuedAt       int64  `json:"queued_at"`
 	EstimatedProcessingTime int `json:"estimated_processing_time,omitempty"`
+
+	// FRUGAL local execution fields
+	ExecutedLocally bool   `json:"executed_locally,omitempty"`
+	StatusCode      int    `json:"status_code,omitempty"`
+	ResponseBody    string `json:"response_body,omitempty"`
 }
 
 // ProxyResponse represents the TracktTags proxy response

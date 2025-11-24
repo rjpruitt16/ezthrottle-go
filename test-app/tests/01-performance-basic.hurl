@@ -7,7 +7,7 @@ job_id: jsonpath "$.result.job_id"
 idempotent_key: jsonpath "$.idempotent_key"
 
 # Poll for webhook (retry up to 30s)
-GET {{APP_URL}}/webhooks/{{job_id}}
+GET {{APP_URL}}/webhooks/{{idempotent_key}}
 [Options]
 retry: 30
 retry-interval: 1000
