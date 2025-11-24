@@ -50,15 +50,15 @@ func WithHTTPClient(client *http.Client) ClientOption {
 	}
 }
 
-// QueueRequest queues a request through EZThrottle
-func (c *Client) QueueRequest(req *QueueRequest) (*QueueResponse, error) {
+// SubmitJob submits a job to EZThrottle with full API support
+func (c *Client) SubmitJob(req *SubmitJobRequest) (*QueueResponse, error) {
 	// Build the job payload
 	jobPayload := map[string]interface{}{
-		"url":         req.URL,
-		"method":      req.Method,
-		"webhook_url": req.WebhookURL,
+		"url":    req.URL,
+		"method": req.Method,
 	}
 
+	// Add optional fields
 	if req.Headers != nil {
 		jobPayload["headers"] = req.Headers
 	}
@@ -68,13 +68,46 @@ func (c *Client) QueueRequest(req *QueueRequest) (*QueueResponse, error) {
 	if req.Metadata != nil {
 		jobPayload["metadata"] = req.Metadata
 	}
+	if req.Webhooks != nil && len(req.Webhooks) > 0 {
+		jobPayload["webhooks"] = req.Webhooks
+	}
+	if req.WebhookQuorum > 0 {
+		jobPayload["webhookQuorum"] = req.WebhookQuorum
+	}
+	if req.Regions != nil && len(req.Regions) > 0 {
+		jobPayload["regions"] = req.Regions
+	}
+	if req.RegionPolicy != "" {
+		jobPayload["regionPolicy"] = req.RegionPolicy
+	}
+	if req.ExecutionMode != "" {
+		jobPayload["executionMode"] = req.ExecutionMode
+	}
+	if req.RetryPolicy != nil {
+		jobPayload["retryPolicy"] = req.RetryPolicy
+	}
+	if req.FallbackJob != nil {
+		jobPayload["fallbackJob"] = req.FallbackJob
+	}
+	if req.OnSuccess != nil {
+		jobPayload["onSuccess"] = req.OnSuccess
+	}
+	if req.OnFailure != nil {
+		jobPayload["onFailure"] = req.OnFailure
+	}
+	if req.OnFailureTimeoutMs > 0 {
+		jobPayload["onFailureTimeoutMs"] = req.OnFailureTimeoutMs
+	}
+	if req.IdempotentKey != "" {
+		jobPayload["idempotentKey"] = req.IdempotentKey
+	}
 	if req.RetryAt > 0 {
-		jobPayload["retry_at"] = req.RetryAt
+		jobPayload["retryAt"] = req.RetryAt
 	}
 
 	// Build proxy payload
 	proxyPayload := map[string]interface{}{
-		"url":    "https://ezthrottle-staging.fly.dev/api/v1/jobs",
+		"url":    "https://ezthrottle.fly.dev/api/v1/jobs",
 		"method": "POST",
 		"headers": map[string]string{
 			"Content-Type": "application/json",
@@ -154,6 +187,35 @@ func (c *Client) QueueRequest(req *QueueRequest) (*QueueResponse, error) {
 	return &queueResp, nil
 }
 
+// QueueRequest queues a request through EZThrottle (DEPRECATED: Use SubmitJob)
+// This method is kept for backward compatibility
+func (c *Client) QueueRequest(req *QueueRequest) (*QueueResponse, error) {
+	// Convert QueueRequest to SubmitJobRequest
+	submitReq := &SubmitJobRequest{
+		URL:     req.URL,
+		Method:  req.Method,
+		Headers: req.Headers,
+		Body:    req.Body,
+		RetryAt: req.RetryAt,
+	}
+
+	// Convert webhook_url to webhooks array
+	if req.WebhookURL != "" {
+		submitReq.Webhooks = []Webhook{{URL: req.WebhookURL, HasQuorumVote: true}}
+		submitReq.WebhookQuorum = 1
+	}
+
+	// Convert metadata map[string]string to map[string]interface{}
+	if req.Metadata != nil {
+		submitReq.Metadata = make(map[string]interface{})
+		for k, v := range req.Metadata {
+			submitReq.Metadata[k] = v
+		}
+	}
+
+	return c.SubmitJob(submitReq)
+}
+
 // Request makes a direct HTTP request (bypasses TracktTags and EZThrottle)
 func (c *Client) Request(method, url string, headers map[string]string, body string) (*http.Response, error) {
 	var bodyReader io.Reader
@@ -193,7 +255,7 @@ func (c *Client) QueueAndWait(req *QueueRequest, timeout time.Duration, pollInte
 
 // Types
 
-// QueueRequest represents a request to queue through EZThrottle
+// QueueRequest represents a request to queue through EZThrottle (DEPRECATED: Use SubmitJobRequest)
 type QueueRequest struct {
 	URL        string            `json:"url"`
 	WebhookURL string            `json:"webhook_url"`
@@ -202,6 +264,42 @@ type QueueRequest struct {
 	Body       string            `json:"body,omitempty"`
 	Metadata   map[string]string `json:"metadata,omitempty"`
 	RetryAt    int64             `json:"retry_at,omitempty"` // Unix timestamp in milliseconds
+}
+
+// SubmitJobRequest represents a job submission with full API support
+type SubmitJobRequest struct {
+	URL                 string                 `json:"url"`
+	Method              string                 `json:"method"`
+	Headers             map[string]string      `json:"headers,omitempty"`
+	Body                string                 `json:"body,omitempty"`
+	Metadata            map[string]interface{} `json:"metadata,omitempty"`
+	Webhooks            []Webhook              `json:"webhooks,omitempty"`
+	WebhookQuorum       int                    `json:"webhookQuorum,omitempty"`
+	Regions             []string               `json:"regions,omitempty"`
+	RegionPolicy        string                 `json:"regionPolicy,omitempty"`        // "fallback" or "strict"
+	ExecutionMode       string                 `json:"executionMode,omitempty"`       // "race" or "fanout"
+	RetryPolicy         *RetryPolicy           `json:"retryPolicy,omitempty"`
+	FallbackJob         *SubmitJobRequest      `json:"fallbackJob,omitempty"`
+	OnSuccess           *SubmitJobRequest      `json:"onSuccess,omitempty"`
+	OnFailure           *SubmitJobRequest      `json:"onFailure,omitempty"`
+	OnFailureTimeoutMs  int                    `json:"onFailureTimeoutMs,omitempty"`
+	IdempotentKey       string                 `json:"idempotentKey,omitempty"`
+	RetryAt             int64                  `json:"retryAt,omitempty"` // Unix timestamp in milliseconds
+}
+
+// Webhook represents a webhook configuration
+type Webhook struct {
+	URL            string   `json:"url"`
+	Regions        []string `json:"regions,omitempty"`
+	HasQuorumVote  bool     `json:"hasQuorumVote,omitempty"`
+}
+
+// RetryPolicy represents retry configuration
+type RetryPolicy struct {
+	MaxRetries   int   `json:"maxRetries,omitempty"`
+	MaxReroutes  int   `json:"maxReroutes,omitempty"`
+	RetryCodes   []int `json:"retryCodes,omitempty"`
+	RerouteCodes []int `json:"rerouteCodes,omitempty"`
 }
 
 // QueueResponse represents the response from queueing a job
