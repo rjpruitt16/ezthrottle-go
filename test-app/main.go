@@ -64,7 +64,8 @@ func main() {
 	r.POST("/webhook", gin.WrapH(client.WebhookHandler()))
 
 	// Query endpoints for Hurl tests
-	r.GET("/webhooks/:idempotent_key", getWebhook)
+	// Use wildcard to handle idempotent keys with special chars (: and /)
+	r.GET("/webhooks/*idempotent_key", getWebhook)
 	r.GET("/webhooks", listWebhooks)
 
 	// =============================================================================
@@ -100,7 +101,11 @@ func main() {
 
 // Query webhook result by idempotent key (for Hurl tests)
 func getWebhook(c *gin.Context) {
+	// Wildcard params include leading /, so strip it
 	idempotentKey := c.Param("idempotent_key")
+	if len(idempotentKey) > 0 && idempotentKey[0] == '/' {
+		idempotentKey = idempotentKey[1:]
+	}
 
 	// Query SDK's webhook store
 	webhook, exists := client.GetWebhookResult(idempotentKey)
