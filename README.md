@@ -16,6 +16,10 @@ No need to manage Lambda functions, SQS queues, DynamoDB, or complex retry logic
 
 The era of managing serverless infrastructure is over. No more Lambda functions to deploy, SQS queues to configure, DynamoDB tables to provision, or CloudWatch alarms to tune. EZThrottle replaces your entire background job infrastructure with a single API call. Just code your business logic—we handle the rest.
 
+### Speed & Reliability Through Multi-Region Racing
+
+Execute requests across multiple geographic regions simultaneously (IAD, LAX, ORD, etc.). **The fastest region wins**—delivering sub-second response times. When a region experiences issues, requests automatically route to healthy regions with zero configuration. Geographic distribution + intelligent routing = blazing-fast reliable delivery, every time.
+
 ## Installation
 
 ```bash
