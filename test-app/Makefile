@@ -1,22 +1,27 @@
 .PHONY: integration deploy secrets teardown
 
-# Integration tests (deploy + test + teardown)
+# Integration tests (deploy + scale up + test + teardown)
 integration:
-	@echo "🚀 Deploying test app to Fly..."
+	@echo "🚀 Starting integration test cycle..."
+	@echo ""
+	@echo "📦 STEP 1/4: Deploying test app to Fly..."
 	@$(MAKE) deploy
 	@echo ""
-	@echo "⏳ Waiting 5s for deployment..."
-	sleep 5
+	@echo "⬆️  STEP 2/4: Scaling app up..."
+	@fly scale count 1 --app ezthrottle-sdk-go --yes 2>&1 || echo "⚠️  Scale up failed"
+	@echo "   Waiting 10s for app to start..."
+	@sleep 10
+	@echo "✅ App is running"
 	@echo ""
-	@echo "🧪 Running Hurl integration tests..."
-	hurl tests/*.hurl \
+	@echo "🧪 STEP 3/4: Running Hurl integration tests..."
+	@hurl tests/*.hurl \
 		--variable APP_URL=https://ezthrottle-sdk-go.fly.dev \
 		--test \
-		--color
+		--color || (echo "❌ Tests failed! App left running for debugging" && exit 1)
 	@echo ""
 	@echo "✅ All tests passed!"
 	@echo ""
-	@echo "🔻 Scaling app to zero..."
+	@echo "🔻 STEP 4/4: Scaling app to zero..."
 	@$(MAKE) teardown
 	@echo "✅ Integration tests complete! App scaled to zero (no cost)"
 
