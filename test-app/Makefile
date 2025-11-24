@@ -16,11 +16,22 @@ integration:
 	@echo ""
 	@echo "✅ All tests passed!"
 	@echo ""
-	@echo "🧹 Tearing down test app..."
+	@echo "🔻 Scaling app to zero..."
 	@$(MAKE) teardown
+	@echo "✅ Integration tests complete! App scaled to zero (no cost)"
 
 # Deploy to Fly.io (from parent directory to include SDK source)
 deploy:
+	@echo "   Listing Fly organizations..."
+	@fly orgs list || echo "⚠️  Could not list orgs"
+
+	@echo "   Listing Fly apps..."
+	@fly apps list || echo "⚠️  Could not list apps"
+
+	@echo "   Creating Fly app (if needed)..."
+	@fly apps create ezthrottle-sdk-go --org ezthrottle 2>&1 || echo "⚠️  App create failed (might already exist)"
+
+	@echo "   Deploying to Fly..."
 	@cd .. && fly deploy \
 		--config test-app/fly.toml \
 		--dockerfile test-app/Dockerfile \
@@ -31,6 +42,7 @@ deploy:
 secrets:
 	@bash -c 'source .env.test'
 
-# Teardown (destroy the app to save resources)
+# Teardown (scale to zero to save resources without destroying the app)
 teardown:
-	@fly apps destroy ezthrottle-sdk-go --yes || true
+	@fly scale count 0 --app ezthrottle-sdk-go --yes 2>&1 || echo "⚠️  Scale to zero failed (app might not exist)"
+	@echo "✅ App scaled to zero (costs nothing when idle)"
