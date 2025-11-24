@@ -10,6 +10,12 @@ Official Go client for [EZThrottle](https://ezthrottle.network) - The World's Fi
 
 No need to manage Lambda functions, SQS queues, DynamoDB, or complex retry logic. EZThrottle handles webhook fanout, distributed queuing, and multi-region orchestration for you. Just grab an API key and start shipping reliable API calls.
 
+### The End of Serverless Infrastructure
+
+**RIP OPS. Hello serverless without maintenance.**
+
+The era of managing serverless infrastructure is over. No more Lambda functions to deploy, SQS queues to configure, DynamoDB tables to provision, or CloudWatch alarms to tune. EZThrottle replaces your entire background job infrastructure with a single API call. Just code your business logic—we handle the rest.
+
 ## Installation
 
 ```bash
