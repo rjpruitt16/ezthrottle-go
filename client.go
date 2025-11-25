@@ -398,3 +398,223 @@ func (e *EZThrottleError) Error() string {
 	}
 	return e.Message
 }
+
+// ============================================================================
+// WEBHOOK SECRETS MANAGEMENT
+// ============================================================================
+
+// CreateWebhookSecret creates or updates webhook HMAC secrets for signature verification.
+//
+// Parameters:
+//   - primarySecret: Primary webhook secret (min 16 characters)
+//   - secondarySecret: Optional secondary secret for rotation (min 16 characters, use empty string if not provided)
+//
+// Returns:
+//   - map containing response with status and message
+//   - error if secret creation fails
+//
+// Example:
+//
+//	// Create primary secret
+//	result, err := client.CreateWebhookSecret("your_secure_secret_here_min_16_chars", "")
+//
+//	// Create with rotation support (primary + secondary)
+//	result, err := client.CreateWebhookSecret(
+//	    "new_secret_after_rotation",
+//	    "old_secret_before_rotation",
+//	)
+func (c *Client) CreateWebhookSecret(primarySecret, secondarySecret string) (map[string]interface{}, error) {
+	if len(primarySecret) < 16 {
+		return nil, fmt.Errorf("primarySecret must be at least 16 characters")
+	}
+
+	if secondarySecret != "" && len(secondarySecret) < 16 {
+		return nil, fmt.Errorf("secondarySecret must be at least 16 characters")
+	}
+
+	payload := map[string]interface{}{
+		"primary_secret": primarySecret,
+	}
+	if secondarySecret != "" {
+		payload["secondary_secret"] = secondarySecret
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	proxyPayload := map[string]interface{}{
+		"scope":       "customer",
+		"metric_name": "",
+		"target_url":  "https://ezthrottle.fly.dev/api/v1/webhook-secrets",
+		"method":      "POST",
+		"headers": map[string]string{
+			"Content-Type": "application/json",
+		},
+		"body": string(payloadBytes),
+	}
+
+	return c.proxyRequest(proxyPayload)
+}
+
+// GetWebhookSecret retrieves webhook secrets (masked for security).
+//
+// Returns:
+//   - map containing customer_id, masked primary_secret, masked secondary_secret, and has_secondary boolean
+//   - error if secrets not configured (404) or request fails
+//
+// Example:
+//
+//	secrets, err := client.GetWebhookSecret()
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	fmt.Printf("Primary: %s\n", secrets["primary_secret"]) // "your****ars"
+//	fmt.Printf("Has Secondary: %v\n", secrets["has_secondary"]) // true/false
+func (c *Client) GetWebhookSecret() (map[string]interface{}, error) {
+	proxyPayload := map[string]interface{}{
+		"scope":       "customer",
+		"metric_name": "",
+		"target_url":  "https://ezthrottle.fly.dev/api/v1/webhook-secrets",
+		"method":      "GET",
+		"headers":     map[string]string{},
+		"body":        "",
+	}
+
+	result, err := c.proxyRequest(proxyPayload)
+	if err != nil {
+		// Check if it's a 404 (no secrets configured)
+		if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "No webhook secrets configured") {
+			return nil, fmt.Errorf("no webhook secrets configured. Call CreateWebhookSecret() first")
+		}
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// DeleteWebhookSecret deletes webhook secrets.
+//
+// Returns:
+//   - map containing response with status and message
+//   - error if deletion fails
+//
+// Example:
+//
+//	result, err := client.DeleteWebhookSecret()
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	fmt.Println(result["message"]) // "Webhook secrets deleted"
+func (c *Client) DeleteWebhookSecret() (map[string]interface{}, error) {
+	proxyPayload := map[string]interface{}{
+		"scope":       "customer",
+		"metric_name": "",
+		"target_url":  "https://ezthrottle.fly.dev/api/v1/webhook-secrets",
+		"method":      "DELETE",
+		"headers":     map[string]string{},
+		"body":        "",
+	}
+
+	return c.proxyRequest(proxyPayload)
+}
+
+// RotateWebhookSecret rotates webhook secret safely by promoting secondary to primary.
+//
+// Parameters:
+//   - newSecret: New webhook secret to set as primary (min 16 characters)
+//
+// Returns:
+//   - map containing response with status and message
+//   - error if rotation fails
+//
+// Example:
+//
+//	// Step 1: Rotate (keeps old secret as backup)
+//	result, err := client.RotateWebhookSecret("new_secret_min_16_chars")
+//
+//	// Step 2: After verifying webhooks work with new secret
+//	// Remove old secret by setting only new one
+//	result, err = client.CreateWebhookSecret("new_secret_min_16_chars", "")
+func (c *Client) RotateWebhookSecret(newSecret string) (map[string]interface{}, error) {
+	if len(newSecret) < 16 {
+		return nil, fmt.Errorf("newSecret must be at least 16 characters")
+	}
+
+	// Try to get current secret
+	current, err := c.GetWebhookSecret()
+	if err != nil {
+		// No existing secret, just create new one
+		if strings.Contains(err.Error(), "No webhook secrets configured") {
+			return c.CreateWebhookSecret(newSecret, "")
+		}
+		return nil, err
+	}
+
+	// Get old primary secret
+	oldPrimary, ok := current["primary_secret"].(string)
+	if !ok || strings.Contains(oldPrimary, "****") {
+		// Masked secret, can't use as secondary
+		return c.CreateWebhookSecret(newSecret, "")
+	}
+
+	// Set new as primary, old as secondary
+	return c.CreateWebhookSecret(newSecret, oldPrimary)
+}
+
+// proxyRequest is a helper method for making requests through TracktTags proxy
+func (c *Client) proxyRequest(proxyPayload map[string]interface{}) (map[string]interface{}, error) {
+	payloadBytes, err := json.Marshal(proxyPayload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", c.tracktTagsURL+"/api/v1/proxy", bytes.NewReader(payloadBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("proxy request failed: %s", string(bodyBytes))
+	}
+
+	var proxyResp ProxyResponse
+	if err := json.Unmarshal(bodyBytes, &proxyResp); err != nil {
+		return nil, fmt.Errorf("failed to parse proxy response: %w", err)
+	}
+
+	if proxyResp.Status != "allowed" {
+		return nil, fmt.Errorf("request denied: %s", proxyResp.Error)
+	}
+
+	forwarded := proxyResp.ForwardedResponse
+	if forwarded.StatusCode == 404 {
+		return nil, fmt.Errorf("404: %s", forwarded.Body)
+	}
+
+	if forwarded.StatusCode < 200 || forwarded.StatusCode >= 300 {
+		return nil, fmt.Errorf("request failed: %s", forwarded.Body)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(forwarded.Body), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return result, nil
+}

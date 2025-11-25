@@ -344,6 +344,115 @@ if err != nil {
 }
 ```
 
+## Webhook Security (HMAC Signatures)
+
+Protect webhooks from spoofing with HMAC-SHA256 signature verification.
+
+### Quick Setup
+
+```go
+package main
+
+import (
+    "io"
+    "log"
+    "net/http"
+
+    "github.com/rjpruitt16/ezthrottle-go"
+)
+
+const WEBHOOK_SECRET = "your_secret_min_16_chars"
+
+func webhookHandler(w http.ResponseWriter, r *http.Request) {
+    // Read raw body
+    body, _ := io.ReadAll(r.Body)
+    signature := r.Header.Get("X-EZThrottle-Signature")
+
+    // Verify signature
+    result := ezthrottle.VerifyWebhookSignature(body, signature, WEBHOOK_SECRET, 300)
+    if !result.Verified {
+        http.Error(w, "Invalid signature: "+result.Reason, http.StatusUnauthorized)
+        return
+    }
+
+    // Process webhook...
+    log.Printf("Webhook verified! Job completed")
+    w.WriteHeader(http.StatusOK)
+}
+```
+
+### Verification Functions
+
+```go
+// Boolean verification
+result := ezthrottle.VerifyWebhookSignature(payload, signature, secret, 300)
+if !result.Verified {
+    log.Printf("Failed: %s", result.Reason)
+}
+
+// Strict verification (returns error)
+if err := ezthrottle.VerifyWebhookSignatureStrict(payload, signature, secret, 300); err != nil {
+    log.Fatal(err)
+}
+
+// Secret rotation support
+result := ezthrottle.TryVerifyWithSecrets(
+    payload,
+    signature,
+    "new_secret",
+    "old_secret", // Optional (use "" if not rotating)
+    300,
+)
+log.Println(result.Reason) // "valid_primary" or "valid_secondary"
+```
+
+### Manage Secrets
+
+```go
+// Create/update
+result, _ := client.CreateWebhookSecret("primary_secret", "secondary_secret")
+
+// Get (masked)
+secrets, _ := client.GetWebhookSecret()
+// map[string]interface{}{
+//   "primary_secret": "prim****cret",
+//   "has_secondary": true
+// }
+
+// Rotate safely
+result, _ = client.RotateWebhookSecret("new_secret")
+
+// Delete
+result, _ = client.DeleteWebhookSecret()
+```
+
+### Quick Commands (One-Liners)
+
+```bash
+# Create secret
+go run -e 'package main; import "github.com/rjpruitt16/ezthrottle-go"; func main() { client := ezthrottle.NewClient("your_api_key"); client.CreateWebhookSecret("your_secret_min_16_chars", "") }'
+
+# Get secrets (view masked)
+go run -e 'package main; import ("fmt"; "github.com/rjpruitt16/ezthrottle-go"); func main() { client := ezthrottle.NewClient("your_api_key"); secrets, _ := client.GetWebhookSecret(); fmt.Println(secrets) }'
+
+# Rotate secret
+go run -e 'package main; import "github.com/rjpruitt16/ezthrottle-go"; func main() { client := ezthrottle.NewClient("your_api_key"); client.RotateWebhookSecret("new_secret_min_16_chars") }'
+
+# Delete secrets
+go run -e 'package main; import "github.com/rjpruitt16/ezthrottle-go"; func main() { client := ezthrottle.NewClient("your_api_key"); client.DeleteWebhookSecret() }'
+
+# With environment variable
+export EZTHROTTLE_API_KEY="your_api_key"
+go run -e 'package main; import ("os"; "github.com/rjpruitt16/ezthrottle-go"); func main() { client := ezthrottle.NewClient(os.Getenv("EZTHROTTLE_API_KEY")); client.CreateWebhookSecret("secret", "") }'
+```
+
+### Best Practices
+
+1. Always verify signatures in production
+2. Use 32+ character random secrets
+3. Rotate secrets periodically with primary + secondary
+4. Store secrets in environment variables
+
 ## Configuration
 
 ```go
