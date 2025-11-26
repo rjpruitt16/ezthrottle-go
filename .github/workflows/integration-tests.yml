@@ -41,19 +41,24 @@ jobs:
       run: |
         sudo ln -sf $(which flyctl) /usr/local/bin/fly
 
-    - name: Create .env.test from secrets
+    - name: Create .env.test and set Fly secrets
       env:
         EZTHROTTLE_API_KEY: ${{ secrets.EZTHROTTLE_API_KEY }}
+        FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       run: |
         cd test-app
-        cat > .env.test << 'EOF'
-        fly secrets set \
-          EZTHROTTLE_API_KEY=${{ secrets.EZTHROTTLE_API_KEY }} \
-          EZTHROTTLE_URL=https://ezthrottle.fly.dev \
-          APP_URL=https://ezthrottle-sdk-go.fly.dev \
-          --app ezthrottle-sdk-go
+        cat > .env.test << EOF
+        EZTHROTTLE_API_KEY=${{ secrets.EZTHROTTLE_API_KEY }}
+        EZTHROTTLE_URL=https://ezthrottle.fly.dev
+        APP_URL=https://ezthrottle-sdk-go.fly.dev
         EOF
-        chmod +x .env.test
+
+        # Set secrets in Fly app
+        fly secrets set \
+          EZTHROTTLE_API_KEY="${{ secrets.EZTHROTTLE_API_KEY }}" \
+          EZTHROTTLE_URL="https://ezthrottle.fly.dev" \
+          APP_URL="https://ezthrottle-sdk-go.fly.dev" \
+          --app ezthrottle-sdk-go
 
     - name: Run Integration Tests
       env:

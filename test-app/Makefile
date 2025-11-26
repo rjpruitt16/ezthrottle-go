@@ -25,9 +25,9 @@ help:
 secrets:
 	@echo "🔒 Setting Fly secrets (EZThrottle: $(EZTHROTTLE_ENV) → $(EZTHROTTLE_URL))..."
 	@if [ -f .env.test ]; then \
-		fly secrets set --app $(APP_NAME) EZTHROTTLE_URL=$(EZTHROTTLE_URL) $$(grep -v '^#' .env.test | grep -v '^$$' | xargs) 2>/dev/null || echo "⚠️  Could not set secrets (app may not exist yet)"; \
+		fly secrets set --app $(APP_NAME) EZTHROTTLE_URL=$(EZTHROTTLE_URL) APP_URL=$(APP_URL) $$(grep -v '^#' .env.test | grep -v '^$$' | xargs) 2>/dev/null || echo "⚠️  Could not set secrets (app may not exist yet)"; \
 	else \
-		fly secrets set --app $(APP_NAME) EZTHROTTLE_URL=$(EZTHROTTLE_URL) 2>/dev/null || echo "⚠️  Could not set secrets"; \
+		fly secrets set --app $(APP_NAME) EZTHROTTLE_URL=$(EZTHROTTLE_URL) APP_URL=$(APP_URL) 2>/dev/null || echo "⚠️  Could not set secrets"; \
 	fi
 	@echo "✅ Secrets set (or skipped)"
 
