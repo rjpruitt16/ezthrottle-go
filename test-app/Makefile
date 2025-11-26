@@ -87,7 +87,7 @@ test:
 	@curl -X POST $(APP_URL)/webhooks/reset -s > /dev/null
 	@echo "   Running hurl tests..."
 	@hurl --test \
-		--variable TEST_APP_URL=$(APP_URL) \
+		--variable APP_URL=$(APP_URL) \
 		--color \
 		tests/*.hurl
 	@echo "✅ All tests passed"
